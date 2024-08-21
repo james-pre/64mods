@@ -1,5 +1,5 @@
 /*
- * Sixty-Four Mod: Mod Autoloader
+ * Sixty-Four Mod: Autoloader
  *
  * https://sixtyfour.game-vault.net/wiki/Modding:Index
  *
@@ -15,80 +15,6 @@
  *
  * https://gist.github.com/NamelessCoder/26be6b5db7480de09f9dfb9e80dee3fe#file-demo-js
  */
-class Mod {
-	version = '0.0.0';
-	settings = {};
-	styles = '';
-	label = '';
-	description = '';
-	dependencies = {};
-	conflicts = {};
-	originalMethods = {};
-
-	constructor(configuredOptions, mods) {
-		this.configuredOptions = configuredOptions;
-		this.mods = mods;
-		this.label = this.label.length > 0 ? this.label : this.getName();
-	}
-
-	initializeOptions() {
-		const settings = this.getSettings();
-		for (const settingName in settings) {
-			this.configuredOptions[settingName] = this.configuredOptions[settingName] ?? settings[settingName]?.default ?? null;
-		}
-	}
-
-	getOptions() {
-		return this.configuredOptions ?? {};
-	}
-
-	getSettings() {
-		return this.settings ?? {};
-	}
-
-	getName() {
-		return this.constructor.name;
-	}
-
-	getLabel() {
-		return this.label ?? this.getName();
-	}
-
-	getDescription() {
-		return this.description ?? this.getDescription();
-	}
-
-	getVersion() {
-		return this.version ?? '0.0.0';
-	}
-
-	getStyles() {
-		return this.styles ?? '';
-	}
-
-	getDependencies() {
-		return this.dependencies ?? {};
-	}
-
-	getConflicts() {
-		return this.conflicts ?? {};
-	}
-
-	getMethodReplacements() {
-		return [];
-	}
-
-	setOriginalMethod(prototypeName, methodName, method) {
-		this.originalMethods[prototypeName] = this.originalMethods[prototypeName] ?? {};
-		this.originalMethods[prototypeName][methodName] = method;
-	}
-
-	isEnabled() {
-		return this.enabled;
-	}
-
-	init() {}
-}
 
 class LoadedMod {
 	settings = {};
@@ -99,15 +25,15 @@ class LoadedMod {
 	version = '0.0.0';
 	legacy = false;
 	error = null;
-	constructor(modInstance, savedSettings) {
-		if (!modInstance) {
+	constructor(mod: Mod, savedSettings) {
+		if (!mod) {
 			return;
 		}
-		this.settings = modInstance.getOptions();
-		this.settingTemplates = modInstance.getSettings();
-		this.label = modInstance.getLabel();
+		this.settings = mod.getOptions();
+		this.settingTemplates = mod.settings;
+		this.label = mod.getLabel();
 		this.enabled = savedSettings.enabled ?? false;
-		this.description = modInstance.getDescription();
+		this.description = mod.getDescription();
 	}
 }
 
@@ -129,89 +55,82 @@ class LoadedModWithError extends LoadedMod {
 	}
 }
 
-class Loader {
-	constructor() {}
+export function loadModules() {
+	const fs = require('fs');
 
-	loadModules() {
-		const fs = require('fs');
+	let date = new Date();
+	let timestamp = date.getTime().toString();
 
-		let date = new Date();
-		let timestamp = date.getTime().toString();
+	const fromStorage = window.localStorage.getItem('mods');
+	const saved = JSON.parse(fromStorage ? fromStorage : '{}');
+	const mods = {};
+	const modObjects = {};
 
-		const fromStorage = window.localStorage.getItem('mods');
-		const saved = JSON.parse(fromStorage ? fromStorage : '{}');
-		const mods = {};
-		const modObjects = {};
+	fs.readdirSync(`${__dirname}/mods`)
+		.filter(e => e.substr(-3) === '.js' && e !== 'autoloader.js')
+		.forEach(entry => {
+			let modName = entry.substr(0, entry.length - 3);
+			let hasSavedSetting = typeof saved !== 'undefined' && typeof saved[modName] !== 'undefined';
 
-		fs.readdirSync(`${__dirname}/mods`)
-			.filter(e => e.substr(-3) === '.js' && e !== 'autoloader.js')
-			.forEach(entry => {
-				let modName = entry.substr(0, entry.length - 3);
-				let hasSavedSetting = typeof saved !== 'undefined' && typeof saved[modName] !== 'undefined';
+			(function () {
+				const configuration = saved[modName] ?? {};
+				try {
+					const mod = require(`${__dirname}/mods/` + entry);
+					if (typeof mod === 'function') {
+						const classNames = {};
+						classNames[modName] = mod;
+						const instance = new classNames[modName](configuration.settings ?? {}, mods);
 
-				(function () {
-					const configuration = saved[modName] ?? {};
-					try {
-						const mod = require(`${__dirname}/mods/` + entry);
-						if (typeof mod === 'function') {
-							const classNames = {};
-							classNames[modName] = mod;
-							const instance = new classNames[modName](configuration.settings ?? {}, mods);
+						modObjects[modName] = instance;
+						modObjects[modName].initializeOptions();
 
-							modObjects[modName] = instance;
-							modObjects[modName].initializeOptions();
-
-							mods[modName] = new LoadedMod(instance, configuration);
-						} else {
-							mods[modName] = new LoadedLegacyMod(modName);
-						}
-					} catch (error) {
-						mods[modName] = new LoadedModWithError(modName, error);
+						mods[modName] = new LoadedMod(instance, configuration);
+					} else {
+						mods[modName] = new LoadedLegacyMod(modName);
 					}
-				})();
-			});
-
-		for (const modName in mods) {
-			if (!mods[modName].enabled) {
-				continue;
-			}
-			const mod = modObjects[modName];
-			if (typeof mod !== 'undefined') {
-				const style = mod.getStyles();
-				if (style.length > 0) {
-					document.head.appendChild(document.createElement('style')).innerHTML = style;
+				} catch (error) {
+					mods[modName] = new LoadedModWithError(modName, error);
 				}
+			})();
+		});
 
-				const methodOverrides = mod.getMethodReplacements();
-				methodOverrides.forEach(reg => {
-					mod.setOriginalMethod(reg.class.name, reg.method, reg.class['prototype'][reg.method]);
-					reg.class['prototype'][reg.method] = reg.replacement;
-				});
-				mod.init();
-			}
+	for (const modName in mods) {
+		if (!mods[modName].enabled) {
+			continue;
 		}
+		const mod = modObjects[modName];
+		if (typeof mod !== 'undefined') {
+			const style = mod.getStyles();
+			if (style.length > 0) {
+				document.head.appendChild(document.createElement('style')).innerHTML = style;
+			}
 
-		return mods;
+			const methodOverrides = mod.getMethodReplacements();
+			methodOverrides.forEach(reg => {
+				mod.setOriginalMethod(reg.class.name, reg.method, reg.class['prototype'][reg.method]);
+				reg.class['prototype'][reg.method] = reg.replacement;
+			});
+			mod.init();
+		}
 	}
+
+	return mods;
 }
 
-const loader = new Loader();
-const mods = loader.loadModules();
+const mods = loadModules();
 
-let _game_init = Game.prototype.init;
-let _splash_init = Splash.prototype.init;
-let _splash_show = Splash.prototype.show;
-let _splash_close = Splash.prototype.close;
+const _game_init = Game.prototype.init;
+const _splash_init = Splash.prototype.init;
+const _splash_show = Splash.prototype.show;
+const _splash_close = Splash.prototype.close;
 
-Game.prototype.init = function () {
+Game.prototype.init = function (this: Game) {
 	_game_init.call(this);
 
 	// Fill the global reference to this current instance to allow mods to access it as they are loaded.
-	if (typeof game !== 'object') {
-		window.game = this;
+	if (typeof globalThis.game !== 'object') {
+		globalThis.game = this;
 	}
-
-	this.mods = mods;
 };
 
 Splash.prototype.init = function () {
@@ -283,7 +202,6 @@ Splash.prototype.init = function () {
 			enabled.innerHTML = '<td class="label"><label for="' + fieldId + '">Enabled?</td><td class="setting"></td>';
 			const enabledCheckbox = document.createElement('input');
 			enabledCheckbox.type = 'checkbox';
-			enabledCheckbox.value = 1;
 			enabledCheckbox.id = fieldId;
 			enabledCheckbox.checked = mods[modName].enabled;
 			enabledCheckbox.onchange = e => {
